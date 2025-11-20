@@ -22,7 +22,5 @@ ppnode守护脚本
 
 自动生成日志目录
 
-命令安装：wget -O install.sh https://raw.githubusercontent.com/echo00023/PPnode_Watchdog/main/install.sh \
-    && chmod +x install.sh \
-    && bash install.sh
+命令安装：wget -O install.sh https://raw.githubusercontent.com/echo00023/PPnode_Watchdog/main/install.sh && chmod +x install.sh && bash install.sh
 
