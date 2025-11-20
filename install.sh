@@ -1,47 +1,73 @@
 #!/bin/sh
+# PPnode Watchdog FINAL-V7 (Alpine=OpenRC ; Debian/Ubuntu/CentOS=systemd)
 
-echo "==== PPanel-node Watchdog Installer ===="
-
+LOCKFILE="/var/run/ppnode_watchdog.lock"
 WATCHDOG="/root/ppnode_watchdog.sh"
 LOGFILE="/root/ppnode_watchdog.log"
 
-# 清理残留实例
+echo "==== PPnode Watchdog Installer (FINAL-V7) ===="
+
+# ---------------------------
+# 1. Kill old watchdog
+# ---------------------------
+echo "→ Cleaning old watchdog..."
 pkill -f ppnode_watchdog.sh 2>/dev/null
 
-# Detect PPnode startup mode
+# Remove old systemd services
+rm -f /etc/systemd/system/ppnode-watchdog.service
+rm -f /usr/lib/systemd/system/ppnode-watchdog.service
+rm -f /lib/systemd/system/ppnode-watchdog.service
+systemctl daemon-reload 2>/dev/null
+systemctl reset-failed 2>/dev/null
+
+# Remove old OpenRC services
+rm -f /etc/local.d/ppnode-watchdog.start
+rc-update del local 2>/dev/null
+
+# ---------------------------
+# 2. Detect system type
+# ---------------------------
+OS=""
+if [ -f /etc/alpine-release ]; then
+    OS="alpine"
+else
+    OS="linux"
+fi
+
+# ---------------------------
+# 3. Detect ppnode startup
+# ---------------------------
 if [ -f /etc/init.d/PPanel-node ]; then
     START_CMD="/etc/init.d/PPanel-node start"
-    CHECK_CMD='pgrep -f "^/usr/local/PPanel-node/ppnode"'
-    echo "✔ Alpine mode detected."
 elif [ -f /usr/local/PPanel-node/ppnode ]; then
     START_CMD="/usr/local/PPanel-node/ppnode server"
-    CHECK_CMD='pgrep -f "^/usr/local/PPanel-node/ppnode"'
-    echo "✔ Debian/Ubuntu/CentOS Node mode detected."
 else
     echo "❌ 未找到 PPanel-node 启动文件"
     exit 1
 fi
 
-echo "✔ Start Command: $START_CMD"
+echo "✔ START_CMD = $START_CMD"
 
-# Create watchdog script
+# ---------------------------
+# 4. Create watchdog file
+# ---------------------------
 cat > $WATCHDOG << EOF
 #!/bin/sh
 
+LOCKFILE="/var/run/ppnode_watchdog.lock"
 START_CMD="$START_CMD"
 LOGFILE="$LOGFILE"
 
-check_ppnode() {
-    if pgrep -f "^/usr/local/PPanel-node/ppnode" >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
-}
+# lockfile 防止多实例
+if [ -f "\$LOCKFILE" ]; then
+    echo "已有 watchdog 实例运行，退出。" >> \$LOGFILE
+    exit 0
+fi
+echo $$ > \$LOCKFILE
 
 while true
 do
-    if check_ppnode; then
+    if pgrep -x ppnode >/dev/null 2>&1; then
         echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点在线." >> \$LOGFILE
     else
         echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点离线，正在重启..." >> \$LOGFILE
@@ -49,29 +75,34 @@ do
     fi
     sleep 10
 done
+
 EOF
 
 chmod +x $WATCHDOG
 echo "✔ Watchdog script created."
 
-# Start watchdog
-nohup $WATCHDOG > $LOGFILE 2>&1 &
-echo "✔ Watchdog started."
-
-# Enable autostart
-if [ -f /etc/alpine-release ]; then
+# ---------------------------
+# 5. Start watchdog + enable autostart
+# ---------------------------
+if [ "$OS" = "alpine" ]; then
+    echo "→ Installing OpenRC autostart..."
     echo "#!/bin/sh" > /etc/local.d/ppnode-watchdog.start
     echo "nohup $WATCHDOG > $LOGFILE 2>&1 &" >> /etc/local.d/ppnode-watchdog.start
     chmod +x /etc/local.d/ppnode-watchdog.start
     rc-update add local
-    echo "✔ OpenRC autostart enabled."
+
+    nohup $WATCHDOG > $LOGFILE 2>&1 &
+    echo "✔ Alpine OpenRC watchdog started."
+
 else
+    echo "→ Installing systemd autostart..."
     cat > /etc/systemd/system/ppnode-watchdog.service << EOF
 [Unit]
 Description=PPanel-node Watchdog
 After=network.target
 
 [Service]
+Type=simple
 ExecStart=$WATCHDOG
 Restart=always
 
@@ -81,7 +112,8 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now ppnode-watchdog
-    echo "✔ systemd autostart enabled."
+
+    echo "✔ systemd watchdog started."
 fi
 
-echo "🎉 完成！日志：$LOGFILE"
+echo "🎉 安装完成！日志：$LOGFILE"
