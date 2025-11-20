@@ -5,77 +5,69 @@ echo "==== PPanel-node Watchdog Installer ===="
 WATCHDOG="/root/ppnode_watchdog.sh"
 LOGFILE="/root/ppnode_watchdog.log"
 
-# -----------------------------
-# 自动检测启动方式
-# -----------------------------
+# Detect start command
 detect_ppnode() {
     if [ -f /etc/init.d/PPanel-node ]; then
-        # Alpine 或某些系统
         START_CMD="/etc/init.d/PPanel-node start"
-        CHECK_CMD="pgrep -f PPanel-node"
-        echo "✔ 检测到 PPanel-node 启动方式: /etc/init.d/PPanel-node"
+        CHECK_CMD='pgrep -f "PPanel-node"'
+        echo "✔ Alpine/CentOS legacy init detected."
     elif [ -f /usr/local/PPanel-node/ppnode ]; then
-        # Debian/CentOS
         START_CMD="/usr/local/PPanel-node/ppnode server"
-        CHECK_CMD="pgrep -f 'ppnode server'"
-        echo "✔ 检测到 PPanel-node 启动方式: /usr/local/PPanel-node/ppnode server"
+        CHECK_CMD='ps aux | grep "/usr/local/PPanel-node/ppnode server" | grep -v grep'
+        echo "✔ Debian/Ubuntu/CentOS NodeJS mode detected."
     else
-        echo "❌ 未找到 PPanel-node 启动脚本"
-        echo "请确认 PPanel-node 已成功安装。"
+        echo "❌ Could not find PPanel-node start script."
         exit 1
     fi
+
+    echo "✔ Start Command: $START_CMD"
 }
 
 detect_ppnode
 
-
-# -----------------------------
-# 创建 Watchdog 脚本
-# -----------------------------
+# Create watchdog file
 cat > $WATCHDOG << EOF
 #!/bin/sh
 
 START_CMD="$START_CMD"
-CHECK_CMD="$CHECK_CMD"
+LOGFILE="$LOGFILE"
+
+check_process() {
+    RESULT=\$(sh -c "$CHECK_CMD")
+    if [ -z "\$RESULT" ]; then
+        return 1
+    else
+        return 0
+    fi
+}
 
 while true
 do
-    if ! sh -c "\$CHECK_CMD" >/dev/null 2>&1; then
-        echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 检测到 PPanel-node 已停止，重启中..." >> $LOGFILE
-        nohup sh -c "\$START_CMD" >> $LOGFILE 2>&1 &
+    if check_process; then
+        echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点在线." >> \$LOGFILE
     else
-        echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 正在运行..." >> $LOGFILE
+        echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点离线, 正在重启..." >> \$LOGFILE
+        nohup sh -c "\$START_CMD" >> \$LOGFILE 2>&1 &
     fi
     sleep 10
 done
 EOF
 
 chmod +x $WATCHDOG
-echo "✔ 已创建守护脚本: $WATCHDOG"
+echo "✔ Watchdog script created."
 
-
-# -----------------------------
-# 后台运行 Watchdog
-# -----------------------------
+# Start in background
 nohup $WATCHDOG > $LOGFILE 2>&1 &
-echo "✔ Watchdog 已在后台运行"
+echo "✔ Watchdog started in background."
 
-
-# -----------------------------
-# 设置开机自启
-# -----------------------------
+# Auto start setup
 if [ -f /etc/alpine-release ]; then
-    # Alpine 使用 OpenRC
-    cat > /etc/local.d/ppnode-watchdog.start << EOF
-#!/bin/sh
-nohup $WATCHDOG > $LOGFILE 2>&1 &
-EOF
+    echo "#!/bin/sh" > /etc/local.d/ppnode-watchdog.start
+    echo "nohup $WATCHDOG > $LOGFILE 2>&1 &" >> /etc/local.d/ppnode-watchdog.start
     chmod +x /etc/local.d/ppnode-watchdog.start
     rc-update add local
-    echo "✔ 开机自启已安装 (OpenRC)"
-
+    echo "✔ OpenRC autostart enabled."
 else
-    # Debian/CentOS 使用 systemd
     cat > /etc/systemd/system/ppnode-watchdog.service << EOF
 [Unit]
 Description=PPanel-node Watchdog
@@ -90,11 +82,7 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable --now ppnode-watchdog
-    echo "✔ 开机自启已安装 (systemd)"
+    echo "✔ systemd autostart enabled."
 fi
 
-
-echo ""
-echo "🎉 安装完成！PPanel-node Watchdog 已启动并将在后台守护运行。"
-echo "日志文件: $LOGFILE"
-echo ""
+echo "🎉 完成！日志：$LOGFILE"
