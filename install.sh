@@ -56,6 +56,7 @@ LOCKFILE="/var/run/ppnode_watchdog.lock"
 START_CMD="$START_CMD"
 STOP_CMD="$STOP_CMD"
 LOGFILE="$LOGFILE"
+LAST_RESTART="/var/run/ppnode_last_restart"
 
 CHECK_CMD='pgrep -f "^/usr/local/PPanel-node/ppnode server"'
 
@@ -65,17 +66,40 @@ if [ -f "\$LOCKFILE" ]; then
 fi
 echo \$\$ > \$LOCKFILE
 
+# 初始化重启计时器
+if [ ! -f "\$LAST_RESTART" ]; then
+    date +%s > \$LAST_RESTART
+fi
+
 while true
 do
+    # 精准检测是否在线
     if sh -c "\$CHECK_CMD" >/dev/null 2>&1; then
         echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] [translate:节点在线]" >> \$LOGFILE
     else
         echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] [translate:节点离线，正在重启...]" >> \$LOGFILE
-        # 先停止，确保进程结束
+
+        # 优化重启流程（先强杀 wrapper 和主进程）
         sh -c "\$STOP_CMD" >> \$LOGFILE 2>&1
+
         # 再启动
         nohup sh -c "\$START_CMD" >> \$LOGFILE 2>&1 &
     fi
+
+    # Alpine 每小时强制重启
+    if [ -f /etc/alpine-release ]; then
+        NOW=\$(date +%s)
+        LAST=\$(cat \$LAST_RESTART)
+        DIFF=\$((NOW - LAST))
+
+        if [ \$DIFF -ge 3600 ]; then
+            echo "\$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] [translate:每小时自动重启]" >> \$LOGFILE
+            sh -c "\$STOP_CMD" >> \$LOGFILE 2>&1
+            nohup sh -c "\$START_CMD" >> \$LOGFILE 2>&1 &
+            date +%s > \$LAST_RESTART
+        fi
+    fi
+
     sleep 10
 done
 EOF
