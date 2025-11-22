@@ -1,17 +1,22 @@
 #!/bin/sh
-# PPnode Watchdog FINAL-V9 (Alpine=OpenRC ; Debian/Ubuntu/CentOS=systemd)
-# Author: echo00023 + ChatGPT
+# ============================================================
+# PPnode Watchdog FINAL-V10.2
+# - Alpine: OpenRC + 每小时自动重启
+# - Debian/Ubuntu/CentOS: systemd STOP+START + 每日凌晨4点强制重启
+# - 日志每日轮替 + 自动压缩 + 保留最近7天
+# ============================================================
 
 LOCKFILE="/var/run/ppnode_watchdog.lock"
 WATCHDOG="/root/ppnode_watchdog.sh"
 LOGFILE="/root/ppnode_watchdog.log"
 LAST_RESTART="/var/run/ppnode_last_restart"
+DAILY_RESTART="/var/run/ppnode_daily_restart"
 
-echo "==== PPnode Watchdog Installer (FINAL-V9) ===="
+echo "==== PPnode Watchdog Installer (FINAL-V10.2) ===="
 
-# ----------------------------------------------------
-# 1. Kill old watchdog + remove old service
-# ----------------------------------------------------
+# ============================================================
+# 清理旧 watchdog
+# ============================================================
 echo "→ 清理旧 watchdog..."
 pkill -f ppnode_watchdog.sh 2>/dev/null
 
@@ -24,91 +29,121 @@ systemctl reset-failed 2>/dev/null
 rm -f /etc/local.d/ppnode-watchdog.start
 rc-update del local 2>/dev/null
 
-rm -f $LOCKFILE
-rm -f $LAST_RESTART
+rm -f "$LOCKFILE" "$LAST_RESTART" "$DAILY_RESTART"
 
-# ----------------------------------------------------
-# 2. Detect system
-# ----------------------------------------------------
+# ============================================================
+# 检测系统类型
+# ============================================================
 OS="linux"
 [ -f /etc/alpine-release ] && OS="alpine"
 
-# ----------------------------------------------------
-# 3. Detect PPnode startup / stop commands
-# ----------------------------------------------------
-if [ -f /etc/init.d/PPanel-node ]; then
+# ============================================================
+# 设置启动方式（不同系统）
+# ============================================================
+if [ "$OS" = "alpine" ]; then
     START_CMD="/etc/init.d/PPanel-node start"
     STOP_CMD="/etc/init.d/PPanel-node stop"
 else
-    START_CMD="/usr/local/PPanel-node/ppnode server"
-    STOP_CMD="
-pkill -9 -f '/usr/local/PPanel-node/ppnode server';
-pkill -9 -f 'sh -c /usr/local/PPanel-node/ppnode server';
-"
+    START_CMD="systemctl start PPanel-node"
+    STOP_CMD="systemctl stop PPanel-node"
 fi
 
 echo "✔ START_CMD = $START_CMD"
 echo "✔ STOP_CMD = $STOP_CMD"
 
-# ----------------------------------------------------
-# 4. Create FINAL-V9 Watchdog Script
-# ----------------------------------------------------
+# ============================================================
+# 生成 Watchdog（FINAL-V10.2）
+# ============================================================
 cat > $WATCHDOG << 'EOF'
 #!/bin/sh
 
 LOCKFILE="/var/run/ppnode_watchdog.lock"
 LOGFILE="/root/ppnode_watchdog.log"
 LAST_RESTART="/var/run/ppnode_last_restart"
+DAILY_RESTART="/var/run/ppnode_daily_restart"
 
 START_CMD="__START_CMD__"
 STOP_CMD="__STOP_CMD__"
+OS="__OS__"
 
-# 正确区分 Alpine VS Linux 检测规则
-if [ -f /etc/alpine-release ]; then
-    CHECK_CMD='pgrep -f "^/usr/local/PPanel-node/ppnode server"'
-else
-    # Debian/Ubuntu/CentOS —— 不误判 wrapper
-    CHECK_CMD='ps -eo pid,comm,args | grep "ppnode " | grep "server" | grep -v "sh -c" | grep -v grep'
-fi
+# =====================================================
+# 日志轮替 + 压缩 + 删除 7 天前日志
+# =====================================================
+rotate_log() {
+    TODAY=$(date +%Y-%m-%d)
+    CURRENT="/root/ppnode_watchdog.log"
+    ARCHIVE="/root/ppnode_watchdog_$TODAY.log"
 
-# 防止重复实例
-if [ -f "$LOCKFILE" ]; then
-    exit 0
-fi
-echo $$ > $LOCKFILE
-
-# 初始化强制重启计时器
-if [ ! -f "$LAST_RESTART" ]; then
-    date +%s > $LAST_RESTART
-fi
-
-while true
-do
-    # 检查是否在线
-    if sh -c "$CHECK_CMD" >/dev/null 2>&1; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点在线" >> $LOGFILE
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] 节点离线 → 重启中..." >> $LOGFILE
-
-        # 彻底停止
-        sh -c "$STOP_CMD" >> $LOGFILE 2>&1
-
-        # 重启
-        nohup sh -c "$START_CMD" >> $LOGFILE 2>&1 &
+    if [ ! -f "$ARCHIVE.gz" ]; then
+        if [ -f "$CURRENT" ]; then
+            mv "$CURRENT" "$ARCHIVE"
+            gzip "$ARCHIVE"
+        fi
+        touch "$CURRENT"
     fi
 
-    # Alpine：每小时强制重启（可选增强）
-    if [ -f /etc/alpine-release ]; then
-        NOW=$(date +%s)
-        LAST=$(cat $LAST_RESTART 2>/dev/null)
-        [ -z "$LAST" ] && LAST=0
-        DIFF=$((NOW - LAST))
+    find /root/ -maxdepth 1 -type f -name "ppnode_watchdog_*.log.gz" -mtime +7 -delete
+}
 
-        if [ $DIFF -ge 3600 ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [Watchdog] [每小时自动重启]" >> $LOGFILE
-            sh -c "$STOP_CMD" >> $LOGFILE 2>&1
-            nohup sh -c "$START_CMD" >> $LOGFILE 2>&1 &
-            date +%s > $LAST_RESTART
+# =====================================================
+# 防重复实例
+# =====================================================
+[ -f "$LOCKFILE" ] && exit 0
+echo $$ > "$LOCKFILE"
+
+# 初始计时
+[ ! -f "$LAST_RESTART" ] && date +%s > "$LAST_RESTART"
+[ ! -f "$DAILY_RESTART" ] && echo "0" > "$DAILY_RESTART"
+
+# =====================================================
+# Watchdog 主循环
+# =====================================================
+while true
+do
+    rotate_log
+
+    # =====================================================
+    # Alpine：每小时强制重启
+    # =====================================================
+    if [ "$OS" = "alpine" ]; then
+        if ! pgrep -f "^/usr/local/PPanel-node/ppnode server" >/dev/null 2>&1; then
+            echo "$(date '+%F %T') [Watchdog] 离线 → 自动重启" >> "$LOGFILE"
+            sh -c "$STOP_CMD" >> "$LOGFILE"
+            nohup sh -c "$START_CMD" >> "$LOGFILE" &
+        else
+            echo "$(date '+%F %T') [Watchdog] 在线" >> "$LOGFILE"
+        fi
+
+        NOW=$(date +%s)
+        LAST=$(cat "$LAST_RESTART" 2>/dev/null)
+        [ $((NOW - LAST)) -ge 3600 ] && {
+            echo "$(date '+%F %T') [Watchdog] 每小时自动重启" >> "$LOGFILE"
+            sh -c "$STOP_CMD" >> "$LOGFILE"
+            nohup sh -c "$START_CMD" >> "$LOGFILE" &
+            date +%s > "$LAST_RESTART"
+        }
+
+    else
+    # =====================================================
+    # Debian / Ubuntu / CentOS：systemd + 每日 4 点强制重启
+    # =====================================================
+        if systemctl is-active --quiet PPanel-node; then
+            echo "$(date '+%F %T') [Watchdog] 在线" >> "$LOGFILE"
+        else
+            echo "$(date '+%F %T') [Watchdog] 离线 → STOP + START" >> "$LOGFILE"
+            systemctl stop PPanel-node >> "$LOGFILE"
+            systemctl start PPanel-node >> "$LOGFILE"
+        fi
+
+        HOUR=$(date +%H)
+        TODAY=$(date +%Y-%m-%d)
+        LAST_DAY=$(cat "$DAILY_RESTART" 2>/dev/null)
+
+        if [ "$HOUR" = "04" ] && [ "$TODAY" != "$LAST_DAY" ]; then
+            echo "$(date '+%F %T') [Watchdog] 每日凌晨4点强制重启" >> "$LOGFILE"
+            systemctl stop PPanel-node >> "$LOGFILE"
+            systemctl start PPanel-node >> "$LOGFILE"
+            echo "$TODAY" > "$DAILY_RESTART"
         fi
     fi
 
@@ -116,31 +151,29 @@ do
 done
 EOF
 
-# 插入变量（防 shell 转义问题）
-sed -i "s#__START_CMD__#$START_CMD#g" $WATCHDOG
-sed -i "s#__STOP_CMD__#$STOP_CMD#g" $WATCHDOG
+# 占位符注入
+sed -i "s#__START_CMD__#$START_CMD#" $WATCHDOG
+sed -i "s#__STOP_CMD__#$STOP_CMD#" $WATCHDOG
+sed -i "s#__OS__#$OS#" $WATCHDOG
 
 chmod +x $WATCHDOG
-echo "✔ Watchdog 脚本已创建。"
+echo "✔ Watchdog 脚本已生成。"
 
-# ----------------------------------------------------
-# 5. Start + Enable Autostart
-# ----------------------------------------------------
+# ============================================================
+# 自启动配置
+# ============================================================
 if [ "$OS" = "alpine" ]; then
     echo "→ 安装 OpenRC 自启动..."
     echo "#!/bin/sh" > /etc/local.d/ppnode-watchdog.start
-    echo "nohup $WATCHDOG > $LOGFILE 2>&1 &" >> /etc/local.d/ppnode-watchdog.start
+    echo "nohup $WATCHDOG >> $LOGFILE 2>&1 &" >> /etc/local.d/ppnode-watchdog.start
     chmod +x /etc/local.d/ppnode-watchdog.start
     rc-update add local
-
-    nohup $WATCHDOG > $LOGFILE 2>&1 &
-    echo "✔ Alpine watchdog 已启动。"
-
+    nohup $WATCHDOG >> $LOGFILE 2>&1 &
 else
     echo "→ 安装 systemd 自启动..."
     cat > /etc/systemd/system/ppnode-watchdog.service << EOF
 [Unit]
-Description=PPanel-node Watchdog
+Description=PPnode Watchdog
 After=network.target
 
 [Service]
@@ -151,10 +184,8 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-
     systemctl daemon-reload
     systemctl enable --now ppnode-watchdog
-    echo "✔ systemd watchdog 已启动。"
 fi
 
-echo "🎉 FINAL-V9 安装完成！日志路径：$LOGFILE"
+echo "🎉 FINAL-V10.2（含每日4点重启 + 日志增强）安装完成！日志：$LOGFILE"
