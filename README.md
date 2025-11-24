@@ -4,7 +4,7 @@ PPnode Watchdog 是一个跨 Linux 发行版的 **轻量级守护进程**，用�
 
 - 监控 PPanel-node（PPnode）是否正常运行  
 - 离线自动重启  
-- **每小时强制重启一次（防止 Xray/SS 内存泄露）**  
+- **每小时强制重启一次（防止 Xray 内存泄露）**  
 - 日志自动每日轮替 + 自动压缩  
 - 仅保留最近 7 天日志  
 - 兼容 Alpine / Debian / Ubuntu / CentOS  
