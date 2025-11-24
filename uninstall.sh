@@ -1,48 +1,38 @@
 #!/bin/sh
-# PPnode Watchdog Uninstaller (FINAL-V10)
+# ============================================================
+# PPnode Watchdog — Uninstall Script
+# ============================================================
 
-WATCHDOG="/root/ppnode_watchdog.sh"
-LOGFILE="/root/ppnode_watchdog.log"
-LOCKFILE="/var/run/ppnode_watchdog.lock"
-LAST_RESTART="/var/run/ppnode_last_restart"
+echo "==== 卸载 PPnode Watchdog ===="
 
-echo "==== 卸载 PPnode Watchdog (FINAL-V10) ===="
-
-# ---------------------------
-# Stop running watchdog
-# ---------------------------
-echo "→ 停止 Watchdog..."
+# 停止 watchdog
+echo "→ 停止 watchdog..."
 pkill -f ppnode_watchdog.sh 2>/dev/null
 
-# ---------------------------
-# Remove systemd part
-# ---------------------------
+# 删除 systemd 服务（Debian/Ubuntu/CentOS）
 if [ -f /etc/systemd/system/ppnode-watchdog.service ]; then
-    echo "→ 移除 systemd 服务..."
-    systemctl stop ppnode-watchdog 2>/dev/null
-    systemctl disable ppnode-watchdog 2>/dev/null
+    echo "→ 清除 systemd 服务..."
+    systemctl disable --now ppnode-watchdog 2>/dev/null
     rm -f /etc/systemd/system/ppnode-watchdog.service
     systemctl daemon-reload
-    systemctl reset-failed
 fi
 
-# ---------------------------
-# Remove Alpine OpenRC hooks
-# ---------------------------
-if [ -f /etc/alpine-release ]; then
-    echo "→ 移除 Alpine OpenRC 自启..."
-    rc-update del local 2>/dev/null
+# 删除 Alpine OpenRC 启动项
+if [ -f /etc/local.d/ppnode-watchdog.start ]; then
+    echo "→ 清除 OpenRC 启动项..."
     rm -f /etc/local.d/ppnode-watchdog.start
+    rc-update del local 2>/dev/null
 fi
 
-# ---------------------------
-# Clean files
-# ---------------------------
-echo "→ 清理文件..."
-rm -f "$WATCHDOG"
-rm -f "$LOGFILE"
-rm -f "$LOCKFILE"
-rm -f "$LAST_RESTART"
+# 删除运行文件
+echo "→ 删除运行文件..."
+rm -f /root/ppnode_watchdog.sh
+rm -f /var/run/ppnode_watchdog.lock
+rm -f /var/run/ppnode_last_restart
 
-echo "✔ PPnode Watchdog 已完全卸载。"
-echo "（PPnode 本体未受影响，需要可使用 ppnode 命令继续管理）"
+# 删除日志（可选，如果不想删除注释掉）
+echo "→ 删除日志文件..."
+rm -f /root/ppnode_watchdog.log
+rm -f /root/ppnode_watchdog_*.log.gz
+
+echo "🎉 卸载完成！Watchdog 已彻底删除。"
