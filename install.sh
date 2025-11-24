@@ -12,7 +12,7 @@ LOGFILE="/root/ppnode_watchdog.log"
 LAST_RESTART="/var/run/ppnode_last_restart"
 DAILY_RESTART="/var/run/ppnode_daily_restart"
 
-echo "==== PPnode Watchdog Installer (FINAL-V10.2) ===="
+echo "==== PPnode Watchdog Installer ===="
 
 # ============================================================
 # 清理旧 watchdog
@@ -188,4 +188,4 @@ EOF
     systemctl enable --now ppnode-watchdog
 fi
 
-echo "🎉 FINAL-V10.2（含每日4点重启 + 日志增强）安装完成！日志：$LOGFILE"
+echo "🎉 PPnode Watchdog 安装完成！日志：$LOGFILE"
