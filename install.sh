@@ -1,16 +1,15 @@
 #!/bin/sh
 # ============================================================
-# PPnode Watchdog FINAL-V10.2
+# PPnode Watchdog
 # - Alpine: OpenRC + 每小时自动重启
-# - Debian/Ubuntu/CentOS: systemd STOP+START + 每日凌晨4点强制重启
-# - 日志每日轮替 + 自动压缩 + 保留最近7天
+# - Debian/Ubuntu/CentOS: systemd + 每小时自动重启
+# - 日志每日轮替 + 自动压缩 + 保留最近 7 天
 # ============================================================
 
 LOCKFILE="/var/run/ppnode_watchdog.lock"
 WATCHDOG="/root/ppnode_watchdog.sh"
 LOGFILE="/root/ppnode_watchdog.log"
 LAST_RESTART="/var/run/ppnode_last_restart"
-DAILY_RESTART="/var/run/ppnode_daily_restart"
 
 echo "==== PPnode Watchdog Installer ===="
 
@@ -29,7 +28,7 @@ systemctl reset-failed 2>/dev/null
 rm -f /etc/local.d/ppnode-watchdog.start
 rc-update del local 2>/dev/null
 
-rm -f "$LOCKFILE" "$LAST_RESTART" "$DAILY_RESTART"
+rm -f "$LOCKFILE" "$LAST_RESTART"
 
 # ============================================================
 # 检测系统类型
@@ -38,7 +37,7 @@ OS="linux"
 [ -f /etc/alpine-release ] && OS="alpine"
 
 # ============================================================
-# 设置启动方式（不同系统）
+# 设置启动方式
 # ============================================================
 if [ "$OS" = "alpine" ]; then
     START_CMD="/etc/init.d/PPanel-node start"
@@ -52,7 +51,7 @@ echo "✔ START_CMD = $START_CMD"
 echo "✔ STOP_CMD = $STOP_CMD"
 
 # ============================================================
-# 生成 Watchdog（FINAL-V10.2）
+# 生成 Watchdog（FINAL-V10.3）
 # ============================================================
 cat > $WATCHDOG << 'EOF'
 #!/bin/sh
@@ -60,7 +59,6 @@ cat > $WATCHDOG << 'EOF'
 LOCKFILE="/var/run/ppnode_watchdog.lock"
 LOGFILE="/root/ppnode_watchdog.log"
 LAST_RESTART="/var/run/ppnode_last_restart"
-DAILY_RESTART="/var/run/ppnode_daily_restart"
 
 START_CMD="__START_CMD__"
 STOP_CMD="__STOP_CMD__"
@@ -93,7 +91,6 @@ echo $$ > "$LOCKFILE"
 
 # 初始计时
 [ ! -f "$LAST_RESTART" ] && date +%s > "$LAST_RESTART"
-[ ! -f "$DAILY_RESTART" ] && echo "0" > "$DAILY_RESTART"
 
 # =====================================================
 # Watchdog 主循环
@@ -102,56 +99,43 @@ while true
 do
     rotate_log
 
-    # =====================================================
-    # Alpine：每小时强制重启
-    # =====================================================
+    # 检测运行状态
     if [ "$OS" = "alpine" ]; then
-        if ! pgrep -f "^/usr/local/PPanel-node/ppnode server" >/dev/null 2>&1; then
+        if pgrep -f "^/usr/local/PPanel-node/ppnode server" >/dev/null 2>&1; then
+            echo "$(date '+%F %T') [Watchdog] 在线" >> "$LOGFILE"
+        else
             echo "$(date '+%F %T') [Watchdog] 离线 → 自动重启" >> "$LOGFILE"
             sh -c "$STOP_CMD" >> "$LOGFILE"
             nohup sh -c "$START_CMD" >> "$LOGFILE" &
-        else
-            echo "$(date '+%F %T') [Watchdog] 在线" >> "$LOGFILE"
         fi
-
-        NOW=$(date +%s)
-        LAST=$(cat "$LAST_RESTART" 2>/dev/null)
-        [ $((NOW - LAST)) -ge 3600 ] && {
-            echo "$(date '+%F %T') [Watchdog] 每小时自动重启" >> "$LOGFILE"
-            sh -c "$STOP_CMD" >> "$LOGFILE"
-            nohup sh -c "$START_CMD" >> "$LOGFILE" &
-            date +%s > "$LAST_RESTART"
-        }
-
     else
-    # =====================================================
-    # Debian / Ubuntu / CentOS：systemd + 每日 4 点强制重启
-    # =====================================================
         if systemctl is-active --quiet PPanel-node; then
             echo "$(date '+%F %T') [Watchdog] 在线" >> "$LOGFILE"
         else
-            echo "$(date '+%F %T') [Watchdog] 离线 → STOP + START" >> "$LOGFILE"
+            echo "$(date '+%F %T') [Watchdog] 离线 → STOP+START" >> "$LOGFILE"
             systemctl stop PPanel-node >> "$LOGFILE"
             systemctl start PPanel-node >> "$LOGFILE"
         fi
+    fi
 
-        HOUR=$(date +%H)
-        TODAY=$(date +%Y-%m-%d)
-        LAST_DAY=$(cat "$DAILY_RESTART" 2>/dev/null)
+    # =================================================
+    # 统一：每小时强制重启（所有系统）
+    # =================================================
+    NOW=$(date +%s)
+    LAST=$(cat "$LAST_RESTART")
 
-        if [ "$HOUR" = "04" ] && [ "$TODAY" != "$LAST_DAY" ]; then
-            echo "$(date '+%F %T') [Watchdog] 每日凌晨4点强制重启" >> "$LOGFILE"
-            systemctl stop PPanel-node >> "$LOGFILE"
-            systemctl start PPanel-node >> "$LOGFILE"
-            echo "$TODAY" > "$DAILY_RESTART"
-        fi
+    if [ $((NOW - LAST)) -ge 3600 ]; then
+        echo "$(date '+%F %T') [Watchdog] 每小时自动强制重启" >> "$LOGFILE"
+        sh -c "$STOP_CMD" >> "$LOGFILE"
+        nohup sh -c "$START_CMD" >> "$LOGFILE" &
+        date +%s > "$LAST_RESTART"
     fi
 
     sleep 10
 done
 EOF
 
-# 占位符注入
+# 注入启动命令
 sed -i "s#__START_CMD__#$START_CMD#" $WATCHDOG
 sed -i "s#__STOP_CMD__#$STOP_CMD#" $WATCHDOG
 sed -i "s#__OS__#$OS#" $WATCHDOG
@@ -184,6 +168,7 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
+
     systemctl daemon-reload
     systemctl enable --now ppnode-watchdog
 fi
