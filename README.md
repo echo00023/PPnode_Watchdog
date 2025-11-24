@@ -8,7 +8,7 @@
 - 🟩 自动检测系统类型（Debian/Ubuntu/CentOS/Alpine）
 - 🟦 自动识别 PPnode 启动方式  
   - Alpine 使用 `/etc/init.d/PPanel-node start`
-  - Debian/Ubuntu 使用 `/usr/local/PPanel-node/ppnode server`
+  - Debian/Ubuntu 使用 `systemd` 直接控制
 - 🟨 自动后台运行
 - 🟧 自动开机自启（systemd / OpenRC）
 - 🟫 无 PID 文件环境兼容（基于进程检测）
